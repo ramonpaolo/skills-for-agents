@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Search</title>
+</head>
+<body>
+    <script>
+        window['ai_edge_gallery_get_result'] = async (data) => {
+            try {
+                const jsonData = JSON.parse(data);
+                const query = encodeURIComponent(jsonData.query || '');
+                const searchType = jsonData.type || 'web';
+
+                if (!query) {
+                    return JSON.stringify({
+                        error: 'Search query is required'
+                    });
+                }
+
+                let results = [];
+
+                if (searchType === 'news') {
+                    results = await searchNews(query);
+                } else if (searchType === 'image') {
+                    results = await searchImages(query);
+                } else {
+                    results = await searchWeb(query);
+                }
+
+                return JSON.stringify({
+                    result: {
+                        query: jsonData.query,
+                        type: searchType,
+                        count: results.length,
+                        results: results
+                    }
+                });
+
+            } catch (e) {
+                console.error('Search error:', e);
+                return JSON.stringify({
+                    error: `Search failed: ${e.message}`
+                });
+            }
+        };
+
+        async function searchWeb(query) {
+            const corsProxy = 'https://api.allorigins.win/raw?url=';
+            const searchUrl = `https://html.duckduckgo.com/html/?q=${query}`;
+            
+            try {
+                const response = await fetch(corsProxy + encodeURIComponent(searchUrl));
+                const html = await response.text();
+                return parseDuckDuckGoHTML(html);
+            } catch (e) {
+                return await searchWikipedia(decodeURIComponent(query));
+            }
+        }
+
+        async function searchNews(query) {
+            const corsProxy = 'https://api.allorigins.win/raw?url=';
+            const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query + ' news')}`;
+            
+            try {
+                const response = await fetch(corsProxy + encodeURIComponent(searchUrl));
+                const html = await response.text();
+                return parseDuckDuckGoHTML(html);
+            } catch (e) {
+                return [{ error: 'News search unavailable' }];
+            }
+        }
+
+        async function searchImages(query) {
+            const corsProxy = 'https://api.allorigins.win/raw?url=';
+            const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`;
+            
+            try {
+                const response = await fetch(corsProxy + encodeURIComponent(searchUrl));
+                const html = await response.text();
+                return parseImageResults(html, query);
+            } catch (e) {
+                return [{ error: 'Image search unavailable' }];
+            }
+        }
+
+        async function searchWikipedia(query) {
+            const apiUrl = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=10&namespace=0&format=json&origin=*`;
+            
+            try {
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                
+                if (data && data.length >= 4) {
+                    const titles = data[1];
+                    const descriptions = data[2];
+                    const urls = data[3];
+                    
+                    return titles.map((title, i) => ({
+                        title: title,
+                        snippet: descriptions[i] || '',
+                        url: urls[i] || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`,
+                        source: 'Wikipedia'
+                    }));
+                }
+                return [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function parseDuckDuckGoHTML(html) {
+            const results = [];
+            const resultRegex = /<a class="result__a" href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+            const snippetRegex = /<a class="result__snippet"[^>]*>([^<]+)<\/a>/gi;
+            
+            let match;
+            let snippets = [];
+            
+            while ((match = snippetRegex.exec(html)) !== null) {
+                snippets.push(cleanHTML(match[1]));
+            }
+            
+            let i = 0;
+            while ((match = resultRegex.exec(html)) !== null && i < 10) {
+                results.push({
+                    title: cleanHTML(match[2]),
+                    url: match[1],
+                    snippet: snippets[i] || '',
+                    source: 'DuckDuckGo'
+                });
+                i++;
+            }
+            
+            return results;
+        }
+
+        function parseImageResults(html, query) {
+            const results = [];
+            const imgRegex = /"image":"([^"]+)"/g;
+            const titleRegex = /"title":"([^"]+)"/g;
+            
+            let match;
+            let titles = [];
+            
+            while ((match = titleRegex.exec(html)) !== null) {
+                titles.push(decodeURIComponent(JSON.parse('"' + match[1] + '"')));
+            }
+            
+            let i = 0;
+            while ((match = imgRegex.exec(html)) !== null && i < 10) {
+                results.push({
+                    title: titles[i] || `Image ${i + 1}`,
+                    imageUrl: match[1],
+                    query: query,
+                    source: 'DuckDuckGo Images'
+                });
+                i++;
+            }
+            
+            return results;
+        }
+
+        function cleanHTML(text) {
+            return text
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/<[^>]+>/g, '')
+                .trim();
+        }
+    </script>
+</body>
+</html>
